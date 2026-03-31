@@ -1,0 +1,5 @@
+{
+  "name": "HD Image Upscaler",
+  "description": "Upscale your low-quality photos to 2K or 4K resolution using AI while maintaining exact details.",
+  "requestFramePermissions": []
+}
