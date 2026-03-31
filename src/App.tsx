@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, FormEvent, ChangeEvent, DragEvent, MouseEvent, TouchEvent } from 'react';
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
-import { Upload, Image as ImageIcon, Download, Loader2, Key, Maximize2, X, CheckCircle2, AlertCircle, Play, Trash2 } from 'lucide-react';
+import { Upload, Image as ImageIcon, Download, Loader2, Key, Maximize2, X, CheckCircle2, AlertCircle, Play, Trash2, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Extend window interface for AI Studio specific functions
@@ -38,6 +38,9 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [manualKey, setManualKey] = useState('');
   const [showManualInput, setShowManualInput] = useState(false);
+  const [showOriginalIds, setShowOriginalIds] = useState<Set<string>>(new Set());
+  const [comparingItem, setComparingItem] = useState<QueueItem | null>(null);
+  const [isHoldingOriginal, setIsHoldingOriginal] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync global settings to pending items
@@ -91,7 +94,7 @@ export default function App() {
     }
   };
 
-  const handleManualKeySubmit = (e: React.FormEvent) => {
+  const handleManualKeySubmit = (e: FormEvent) => {
     e.preventDefault();
     if (manualKey.trim()) {
       setHasKey(true);
@@ -140,27 +143,27 @@ export default function App() {
     setQueue(prev => [...prev, ...newItems]);
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const handleImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []) as File[];
     if (files.length === 0) return;
     await processFiles(files);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = (e: DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
+  const handleDragLeave = (e: DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
+  const handleDrop = async (e: DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files);
+    const files = Array.from(e.dataTransfer.files) as File[];
     if (files.length > 0) {
       await processFiles(files);
     }
@@ -291,6 +294,107 @@ export default function App() {
     });
   };
 
+  const toggleOriginal = (id: string) => {
+    setShowOriginalIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const ComparisonModal = ({ item, onClose }: { item: QueueItem; onClose: () => void }) => {
+    const [sliderPos, setSliderPos] = useState(50);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    const handleMouseMove = (e: MouseEvent | TouchEvent) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const position = ((x - rect.left) / rect.width) * 100;
+      setSliderPos(Math.min(Math.max(position, 0), 100));
+    };
+
+    return (
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-2xl flex flex-col"
+      >
+        <div className="p-6 flex justify-between items-center border-b border-white/10">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center">
+              <Maximize2 size={20} className="text-black" />
+            </div>
+            <div>
+              <h3 className="text-xl font-black uppercase italic tracking-tighter">Detail Comparison</h3>
+              <p className="text-[10px] text-white/40 uppercase tracking-widest font-mono">{item.name} • {item.resolution}</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all"
+          >
+            <X size={24} />
+          </button>
+        </div>
+
+        <div className="flex-1 relative overflow-hidden cursor-col-resize select-none" 
+             ref={containerRef}
+             onMouseMove={handleMouseMove}
+             onTouchMove={handleMouseMove}>
+          
+          {/* Upscaled (Bottom) */}
+          <img 
+            src={item.result!} 
+            alt="Upscaled"
+            className="absolute inset-0 w-full h-full object-contain"
+            draggable={false}
+          />
+
+          {/* Original (Top with Clip) */}
+          <div 
+            className="absolute inset-0 overflow-hidden border-r-2 border-orange-500"
+            style={{ width: `${sliderPos}%` }}
+          >
+            <img 
+              src={item.source} 
+              alt="Original"
+              className="absolute inset-0 w-full h-full object-contain"
+              style={{ width: `${100 / (sliderPos / 100)}%` }}
+              draggable={false}
+            />
+            <div className="absolute top-8 left-8 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 text-[10px] font-black uppercase tracking-widest">
+              Original
+            </div>
+          </div>
+
+          <div className="absolute top-8 right-8 bg-orange-500 text-black px-4 py-2 rounded-full border border-orange-600 text-[10px] font-black uppercase tracking-widest">
+            Upscaled {item.resolution}
+          </div>
+
+          {/* Slider Handle */}
+          <div 
+            className="absolute top-0 bottom-0 w-1 bg-orange-500 pointer-events-none"
+            style={{ left: `${sliderPos}%` }}
+          >
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(249,115,22,0.5)] border-4 border-black">
+              <div className="flex gap-0.5">
+                <div className="w-0.5 h-3 bg-black/40 rounded-full" />
+                <div className="w-0.5 h-3 bg-black/40 rounded-full" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-8 bg-black/40 text-center">
+          <p className="text-xs text-white/40 uppercase tracking-[0.3em] font-mono">Move slider to compare neural enhancement details</p>
+        </div>
+      </motion.div>
+    );
+  };
+
   return (
     <div 
       className="min-h-screen bg-[#050505] text-white font-sans selection:bg-orange-500 selection:text-black"
@@ -298,6 +402,16 @@ export default function App() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Comparison Modal */}
+      <AnimatePresence>
+        {comparingItem && (
+          <ComparisonModal 
+            item={comparingItem} 
+            onClose={() => setComparingItem(null)} 
+          />
+        )}
+      </AnimatePresence>
+
       {/* Drag Overlay */}
       <AnimatePresence>
         {isDragging && (
@@ -507,6 +621,28 @@ export default function App() {
                       <div className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-black/40 backdrop-blur-md border border-white/10 text-white/40">
                         {item.resolution} • {item.targetAspectRatio === 'Original' ? item.originalAspectRatio : item.targetAspectRatio}
                       </div>
+                      {item.status === 'completed' && (
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => toggleOriginal(item.id)}
+                            className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest backdrop-blur-md border transition-all flex items-center gap-1.5 ${
+                              showOriginalIds.has(item.id)
+                              ? 'bg-orange-500 border-orange-600 text-black'
+                              : 'bg-white/10 border-white/20 text-white/60 hover:bg-white/20'
+                            }`}
+                          >
+                            {showOriginalIds.has(item.id) ? <EyeOff size={10} /> : <Eye size={10} />}
+                            {showOriginalIds.has(item.id) ? 'Original' : 'Toggle'}
+                          </button>
+                          <button
+                            onClick={() => setComparingItem(item)}
+                            className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-white text-black border border-white hover:bg-orange-500 hover:border-orange-500 transition-all flex items-center gap-1.5"
+                          >
+                            <Maximize2 size={10} />
+                            Compare
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Actions */}
@@ -529,12 +665,25 @@ export default function App() {
                     </div>
 
                     {/* Image Display */}
-                    <div className="flex-1 bg-black/20 relative overflow-hidden">
+                    <div 
+                      className="flex-1 bg-black/20 relative overflow-hidden cursor-pointer"
+                      onMouseDown={() => item.status === 'completed' && setIsHoldingOriginal(item.id)}
+                      onMouseUp={() => setIsHoldingOriginal(null)}
+                      onMouseLeave={() => setIsHoldingOriginal(null)}
+                      onTouchStart={() => item.status === 'completed' && setIsHoldingOriginal(item.id)}
+                      onTouchEnd={() => setIsHoldingOriginal(null)}
+                    >
                       <img 
-                        src={item.result || item.source} 
+                        src={(showOriginalIds.has(item.id) || isHoldingOriginal === item.id) ? item.source : (item.result || item.source)} 
                         alt={item.name} 
                         className={`w-full h-full object-contain transition-all duration-700 ${item.status === 'processing' ? 'scale-110 blur-sm opacity-50' : 'scale-100'}`}
                       />
+                      
+                      {isHoldingOriginal === item.id && (
+                        <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center pointer-events-none">
+                          <p className="text-[10px] font-black uppercase tracking-[0.5em] text-white drop-shadow-lg">Viewing Original</p>
+                        </div>
+                      )}
                       
                       {item.status === 'processing' && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
