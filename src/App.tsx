@@ -36,6 +36,8 @@ export default function App() {
   const [globalResolution, setGlobalResolution] = useState<'2K' | '4K'>('4K');
   const [globalTargetAspectRatio, setGlobalTargetAspectRatio] = useState<string>('Original');
   const [isDragging, setIsDragging] = useState(false);
+  const [manualKey, setManualKey] = useState('');
+  const [showManualInput, setShowManualInput] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync global settings to pending items
@@ -82,9 +84,18 @@ export default function App() {
         setHasKey(true);
       } catch (err) {
         console.error("Failed to open key selector:", err);
+        setShowManualInput(true);
       }
     } else {
-      alert("API Key selector is not available in this environment.");
+      setShowManualInput(true);
+    }
+  };
+
+  const handleManualKeySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (manualKey.trim()) {
+      setHasKey(true);
+      setShowManualInput(false);
     }
   };
 
@@ -168,8 +179,8 @@ export default function App() {
       setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'processing' } : q));
 
       try {
-        // Always create a new instance to use the latest key from the environment
-        const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+        // Priority: Manual Key > Environment API_KEY > Environment GEMINI_API_KEY
+        const apiKey = manualKey || process.env.API_KEY || process.env.GEMINI_API_KEY;
         if (!apiKey) throw new Error("No API Key found. Please connect your key.");
 
         const ai = new GoogleGenAI({ apiKey });
@@ -347,13 +358,42 @@ export default function App() {
                 Connect your Google Cloud API key to unlock the 4K Neural Upscaling engine.
               </p>
             </div>
-            <div className="flex flex-col items-center gap-4">
-              <button 
-                onClick={handleSelectKey}
-                className="bg-orange-500 text-black px-12 py-4 rounded-full font-black text-xl uppercase tracking-tighter hover:scale-105 transition-all shadow-[0_0_30px_rgba(249,115,22,0.4)] active:scale-95"
-              >
-                Select API Key
-              </button>
+            <div className="flex flex-col items-center gap-4 w-full max-w-md">
+              {!showManualInput ? (
+                <button 
+                  onClick={handleSelectKey}
+                  className="bg-orange-500 text-black px-12 py-4 rounded-full font-black text-xl uppercase tracking-tighter hover:scale-105 transition-all shadow-[0_0_30px_rgba(249,115,22,0.4)] active:scale-95 w-full"
+                >
+                  Select API Key
+                </button>
+              ) : (
+                <form onSubmit={handleManualKeySubmit} className="w-full space-y-4">
+                  <div className="relative">
+                    <input 
+                      type="password"
+                      value={manualKey}
+                      onChange={(e) => setManualKey(e.target.value)}
+                      placeholder="Enter your Gemini API Key..."
+                      className="w-full bg-white/5 border border-white/20 rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:outline-none focus:border-orange-500 transition-colors"
+                      autoFocus
+                    />
+                    <Key className="absolute right-4 top-1/2 -translate-y-1/2 text-white/20" size={20} />
+                  </div>
+                  <button 
+                    type="submit"
+                    className="bg-white text-black px-12 py-4 rounded-full font-black text-xl uppercase tracking-tighter hover:bg-orange-500 transition-all active:scale-95 w-full"
+                  >
+                    Confirm Key
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => setShowManualInput(false)}
+                    className="text-white/40 hover:text-white text-xs uppercase tracking-widest w-full"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              )}
               <a 
                 href="https://ai.google.dev/gemini-api/docs/billing" 
                 target="_blank" 
