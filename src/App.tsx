@@ -48,20 +48,43 @@ export default function App() {
   }, [globalResolution, globalTargetAspectRatio]);
 
   useEffect(() => {
-    checkApiKey();
-  }, []);
+    // Check for API key on mount and with a small interval to handle delayed injection
+    const check = async () => {
+      if (window.aistudio) {
+        const selected = await window.aistudio.hasSelectedApiKey();
+        if (selected) {
+          setHasKey(true);
+          return true;
+        }
+      }
+      // Fallback: if process.env has a key, we might be in a dev environment
+      if (process.env.GEMINI_API_KEY || process.env.API_KEY) {
+        setHasKey(true);
+        return true;
+      }
+      return false;
+    };
 
-  const checkApiKey = async () => {
-    if (window.aistudio) {
-      const selected = await window.aistudio.hasSelectedApiKey();
-      setHasKey(selected);
-    }
-  };
+    check();
+    const interval = setInterval(async () => {
+      const found = await check();
+      if (found) clearInterval(interval);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const handleSelectKey = async () => {
     if (window.aistudio) {
-      await window.aistudio.openSelectKey();
-      setHasKey(true); // Assume success as per guidelines
+      try {
+        await window.aistudio.openSelectKey();
+        // As per guidelines, assume success after triggering the dialog
+        setHasKey(true);
+      } catch (err) {
+        console.error("Failed to open key selector:", err);
+      }
+    } else {
+      alert("API Key selector is not available in this environment.");
     }
   };
 
@@ -145,7 +168,11 @@ export default function App() {
       setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'processing' } : q));
 
       try {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        // Always create a new instance to use the latest key from the environment
+        const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+        if (!apiKey) throw new Error("No API Key found. Please connect your key.");
+
+        const ai = new GoogleGenAI({ apiKey });
         const base64Data = item.source.split(',')[1];
         const mimeType = item.source.split(';')[0].split(':')[1];
 
