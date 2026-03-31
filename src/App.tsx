@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { Upload, Image as ImageIcon, Download, Loader2, Key, Maximize2, X, CheckCircle2, AlertCircle, Play, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -24,7 +24,8 @@ interface QueueItem {
   result: string | null;
   status: 'pending' | 'processing' | 'completed' | 'error';
   resolution: '2K' | '4K';
-  aspectRatio: string;
+  originalAspectRatio: string;
+  targetAspectRatio: string;
   name: string;
 }
 
@@ -33,7 +34,18 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [hasKey, setHasKey] = useState(false);
   const [globalResolution, setGlobalResolution] = useState<'2K' | '4K'>('4K');
+  const [globalTargetAspectRatio, setGlobalTargetAspectRatio] = useState<string>('Original');
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync global settings to pending items
+  useEffect(() => {
+    setQueue(prev => prev.map(item => 
+      (item.status === 'pending' || item.status === 'error') 
+        ? { ...item, resolution: globalResolution, targetAspectRatio: globalTargetAspectRatio } 
+        : item
+    ));
+  }, [globalResolution, globalTargetAspectRatio]);
 
   useEffect(() => {
     checkApiKey();
@@ -53,20 +65,19 @@ export default function App() {
     }
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
+  const processFiles = async (files: File[]) => {
     const newItems: QueueItem[] = [];
 
     for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+
       const source = await new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);
         reader.readAsDataURL(file);
       });
 
-      const aspectRatio = await new Promise<string>((resolve) => {
+      const originalAspectRatio = await new Promise<string>((resolve) => {
         const img = new Image();
         img.onload = () => {
           const ratio = img.width / img.height;
@@ -86,13 +97,39 @@ export default function App() {
         result: null,
         status: 'pending',
         resolution: globalResolution,
-        aspectRatio,
+        originalAspectRatio,
+        targetAspectRatio: globalTargetAspectRatio,
         name: file.name
       });
     }
 
     setQueue(prev => [...prev, ...newItems]);
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    await processFiles(files);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      await processFiles(files);
+    }
   };
 
   const processQueue = async () => {
@@ -112,18 +149,49 @@ export default function App() {
         const base64Data = item.source.split(',')[1];
         const mimeType = item.source.split(';')[0].split(':')[1];
 
+        const finalAspectRatio = item.targetAspectRatio === 'Original' ? item.originalAspectRatio : item.targetAspectRatio;
+
         const response = await ai.models.generateContent({
           model: 'gemini-3.1-flash-image-preview',
           contents: {
             parts: [
               { inlineData: { data: base64Data, mimeType } },
-              { text: `Recreate this image exactly as it is, but in high definition ${item.resolution} resolution. Maintain the exact same composition, colors, and details. Ensure the aspect ratio remains ${item.aspectRatio}.` },
+              { text: `STRICT FIDELITY UPSCALING: 
+              Recreate this image in high definition ${item.resolution} resolution. 
+              The result must be a 1:1 REPLICA in terms of content, architecture, and composition.
+
+              CORE DIRECTIVE: 
+              DO NOT add new objects, DO NOT change the structure, and DO NOT invent details that aren't there. 
+              Only ENHANCE and REFINE what is already present to make it look like a high-end professional photograph.
+
+              MATERIAL ENHANCEMENT:
+              Refine existing surfaces to look like real-world materials: enhance the natural grain of wood, the subtle texture of concrete, the depth of stone, and the realistic reflections of glass. Do not replace them with different materials.
+
+              LIGHTING & ATMOSPHERE:
+              Maintain the EXACT time of day and lighting mood. If it's night, keep it night. If it's day, keep it day. 
+              Enhance the contrast and light falloff to match a professional 28mm architectural lens, but do not change the light sources.
+
+              VEGETATION:
+              Refine existing plants and grass to look organic and natural, but keep their original placement and types.
+
+              ASPECT RATIO & COMPOSITION:
+              Target Aspect Ratio: ${finalAspectRatio}.
+              Original Aspect Ratio: ${item.originalAspectRatio}.
+              If these differ, you MUST perform OUTPAINTING: 
+              1. Keep the original image content 100% intact, centered, and at its original scale.
+              2. ONLY extend the background/environment (sky, ground, peripheral walls) to fill the new frame.
+              3. DO NOT stretch or distort any part of the original image.
+
+              QUALITY BAR:
+              No CGI, no 3D render look, no plastic textures, no AI artifacts. 
+              The final image must look like a sharp, clean, premium real estate photo taken with a professional camera.` },
             ],
           },
           config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
             imageConfig: {
               imageSize: item.resolution,
-              aspectRatio: (item.aspectRatio as any) || "1:1",
+              aspectRatio: (finalAspectRatio as any) || "1:1",
             },
           },
         });
@@ -186,7 +254,26 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-orange-500 selection:text-black">
+    <div 
+      className="min-h-screen bg-[#050505] text-white font-sans selection:bg-orange-500 selection:text-black"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag Overlay */}
+      <AnimatePresence>
+        {isDragging && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-orange-500/20 backdrop-blur-md border-4 border-dashed border-orange-500 m-4 rounded-[40px] flex flex-col items-center justify-center pointer-events-none"
+          >
+            <Upload size={64} className="text-orange-500 animate-bounce" />
+            <h2 className="text-4xl font-black uppercase italic tracking-tighter mt-4 text-orange-500">Drop to Upload</h2>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Header */}
       <header className="border-b border-white/5 p-6 flex justify-between items-center bg-black/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="flex items-center gap-4">
@@ -286,6 +373,22 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+
+                <div className="flex bg-black/40 p-1 rounded-2xl border border-white/10">
+                  {['Original', '1:1', '16:9', '9:16', '4:3', '3:4'].map((ratio) => (
+                    <button
+                      key={ratio}
+                      onClick={() => setGlobalTargetAspectRatio(ratio)}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-bold transition-all uppercase tracking-tighter ${
+                        globalTargetAspectRatio === ratio 
+                        ? 'bg-orange-500 text-black shadow-lg' 
+                        : 'text-white/40 hover:text-white'
+                      }`}
+                    >
+                      {ratio}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex gap-3 w-full md:w-auto">
@@ -335,7 +438,7 @@ export default function App() {
                         {item.status}
                       </div>
                       <div className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-black/40 backdrop-blur-md border border-white/10 text-white/40">
-                        {item.resolution} • {item.aspectRatio}
+                        {item.resolution} • {item.targetAspectRatio === 'Original' ? item.originalAspectRatio : item.targetAspectRatio}
                       </div>
                     </div>
 
