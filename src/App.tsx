@@ -26,6 +26,7 @@ interface QueueItem {
   resolution: '2K' | '4K';
   originalAspectRatio: string;
   targetAspectRatio: string;
+  customPrompt: string;
   name: string;
 }
 
@@ -35,8 +36,14 @@ export default function App() {
   const [hasKey, setHasKey] = useState(false);
   const [globalResolution, setGlobalResolution] = useState<'2K' | '4K'>('4K');
   const [globalTargetAspectRatio, setGlobalTargetAspectRatio] = useState<string>('Original');
+  const [globalCustomPrompt, setGlobalCustomPrompt] = useState('');
   const [isDragging, setIsDragging] = useState(false);
-  const [manualKey, setManualKey] = useState('');
+  const [manualKey, setManualKey] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('gemini_api_key') || '';
+    }
+    return '';
+  });
   const [showManualInput, setShowManualInput] = useState(false);
   const [showOriginalIds, setShowOriginalIds] = useState<Set<string>>(new Set());
   const [comparingItem, setComparingItem] = useState<QueueItem | null>(null);
@@ -47,10 +54,10 @@ export default function App() {
   useEffect(() => {
     setQueue(prev => prev.map(item => 
       (item.status === 'pending' || item.status === 'error') 
-        ? { ...item, resolution: globalResolution, targetAspectRatio: globalTargetAspectRatio } 
+        ? { ...item, resolution: globalResolution, targetAspectRatio: globalTargetAspectRatio, customPrompt: globalCustomPrompt } 
         : item
     ));
-  }, [globalResolution, globalTargetAspectRatio]);
+  }, [globalResolution, globalTargetAspectRatio, globalCustomPrompt]);
 
   useEffect(() => {
     // Check for API key on mount and with a small interval to handle delayed injection
@@ -62,6 +69,14 @@ export default function App() {
           return true;
         }
       }
+      
+      // Check localStorage
+      const storedKey = localStorage.getItem('gemini_api_key');
+      if (storedKey) {
+        setHasKey(true);
+        return true;
+      }
+
       // Fallback: if process.env has a key, we might be in a dev environment
       if (process.env.GEMINI_API_KEY || process.env.API_KEY) {
         setHasKey(true);
@@ -97,6 +112,7 @@ export default function App() {
   const handleManualKeySubmit = (e: FormEvent) => {
     e.preventDefault();
     if (manualKey.trim()) {
+      localStorage.setItem('gemini_api_key', manualKey.trim());
       setHasKey(true);
       setShowManualInput(false);
     }
@@ -136,6 +152,7 @@ export default function App() {
         resolution: globalResolution,
         originalAspectRatio,
         targetAspectRatio: globalTargetAspectRatio,
+        customPrompt: globalCustomPrompt,
         name: file.name
       });
     }
@@ -223,6 +240,9 @@ export default function App() {
               2. ONLY extend the background/environment (sky, ground, peripheral walls) to fill the new frame.
               3. DO NOT stretch or distort any part of the original image.
 
+              ${item.customPrompt ? `ADDITIONAL USER INSTRUCTIONS:
+              ${item.customPrompt}` : ''}
+
               QUALITY BAR:
               No CGI, no 3D render look, no plastic textures, no AI artifacts. 
               The final image must look like a sharp, clean, premium real estate photo taken with a professional camera.` },
@@ -304,16 +324,7 @@ export default function App() {
   };
 
   const ComparisonModal = ({ item, onClose }: { item: QueueItem; onClose: () => void }) => {
-    const [sliderPos, setSliderPos] = useState(50);
-    const containerRef = useRef<HTMLDivElement>(null);
-
-    const handleMouseMove = (e: MouseEvent | TouchEvent) => {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const x = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      const position = ((x - rect.left) / rect.width) * 100;
-      setSliderPos(Math.min(Math.max(position, 0), 100));
-    };
+    const [view, setView] = useState<'before' | 'after'>('after');
 
     return (
       <motion.div 
@@ -332,64 +343,50 @@ export default function App() {
               <p className="text-[10px] text-white/40 uppercase tracking-widest font-mono">{item.name} • {item.resolution}</p>
             </div>
           </div>
-          <button 
-            onClick={onClose}
-            className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all"
-          >
-            <X size={24} />
-          </button>
+          <div className="flex items-center gap-4">
+            <div className="flex bg-white/5 p-1 rounded-full border border-white/10">
+              <button 
+                onClick={() => setView('before')}
+                className={`px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${view === 'before' ? 'bg-white text-black' : 'text-white/40 hover:text-white'}`}
+              >
+                Before
+              </button>
+              <button 
+                onClick={() => setView('after')}
+                className={`px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${view === 'after' ? 'bg-orange-500 text-black' : 'text-white/40 hover:text-white'}`}
+              >
+                After
+              </button>
+            </div>
+            <button 
+              onClick={onClose}
+              className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all"
+            >
+              <X size={24} />
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 relative overflow-hidden cursor-col-resize select-none" 
-             ref={containerRef}
-             onMouseMove={handleMouseMove}
-             onTouchMove={handleMouseMove}>
-          
-          {/* Upscaled (Bottom) */}
-          <img 
-            src={item.result!} 
-            alt="Upscaled"
-            className="absolute inset-0 w-full h-full object-contain"
-            draggable={false}
-          />
-
-          {/* Original (Top with Clip) */}
-          <div 
-            className="absolute inset-0 overflow-hidden border-r-2 border-orange-500"
-            style={{ width: `${sliderPos}%` }}
-          >
-            <img 
-              src={item.source} 
-              alt="Original"
-              className="absolute inset-0 w-full h-full object-contain"
-              style={{ width: `${100 / (sliderPos / 100)}%` }}
-              draggable={false}
+        <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4">
+          <AnimatePresence mode="wait">
+            <motion.img 
+              key={view}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 1.05 }}
+              src={view === 'before' ? item.source : item.result!} 
+              alt={view}
+              className="max-w-full max-h-full object-contain shadow-2xl rounded-lg"
             />
-            <div className="absolute top-8 left-8 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 text-[10px] font-black uppercase tracking-widest">
-              Original
-            </div>
-          </div>
-
-          <div className="absolute top-8 right-8 bg-orange-500 text-black px-4 py-2 rounded-full border border-orange-600 text-[10px] font-black uppercase tracking-widest">
-            Upscaled {item.resolution}
-          </div>
-
-          {/* Slider Handle */}
-          <div 
-            className="absolute top-0 bottom-0 w-1 bg-orange-500 pointer-events-none"
-            style={{ left: `${sliderPos}%` }}
-          >
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(249,115,22,0.5)] border-4 border-black">
-              <div className="flex gap-0.5">
-                <div className="w-0.5 h-3 bg-black/40 rounded-full" />
-                <div className="w-0.5 h-3 bg-black/40 rounded-full" />
-              </div>
-            </div>
+          </AnimatePresence>
+          
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 text-xs font-black uppercase tracking-[0.3em] text-white/60">
+            Viewing {view === 'before' ? 'Original Source' : `Upscaled ${item.resolution}`}
           </div>
         </div>
 
         <div className="p-8 bg-black/40 text-center">
-          <p className="text-xs text-white/40 uppercase tracking-[0.3em] font-mono">Move slider to compare neural enhancement details</p>
+          <p className="text-xs text-white/40 uppercase tracking-[0.3em] font-mono">Toggle buttons to compare neural enhancement details</p>
         </div>
       </motion.div>
     );
@@ -521,78 +518,93 @@ export default function App() {
         ) : (
           <div className="space-y-12">
             {/* Controls Bar */}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white/5 p-6 rounded-3xl border border-white/10 backdrop-blur-md">
-              <div className="flex flex-wrap gap-4 items-center">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-3 bg-white text-black px-6 py-3 rounded-2xl font-bold hover:bg-orange-500 transition-all active:scale-95"
-                >
-                  <Upload size={20} />
-                  Add Images
-                </button>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleImageUpload} 
-                  accept="image/*" 
-                  multiple
-                  className="hidden" 
-                />
+            <div className="space-y-6">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white/5 p-6 rounded-3xl border border-white/10 backdrop-blur-md">
+                <div className="flex flex-wrap gap-4 items-center">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-3 bg-white text-black px-6 py-3 rounded-2xl font-bold hover:bg-orange-500 transition-all active:scale-95"
+                  >
+                    <Upload size={20} />
+                    Add Images
+                  </button>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleImageUpload} 
+                    accept="image/*" 
+                    multiple
+                    className="hidden" 
+                  />
 
-                <div className="flex bg-black/40 p-1 rounded-2xl border border-white/10">
-                  {(['2K', '4K'] as const).map((res) => (
-                    <button
-                      key={res}
-                      onClick={() => setGlobalResolution(res)}
-                      className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${
-                        globalResolution === res 
-                        ? 'bg-white text-black shadow-lg' 
-                        : 'text-white/40 hover:text-white'
-                      }`}
-                    >
-                      {res}
-                    </button>
-                  ))}
+                  <div className="flex bg-black/40 p-1 rounded-2xl border border-white/10">
+                    {(['2K', '4K'] as const).map((res) => (
+                      <button
+                        key={res}
+                        onClick={() => setGlobalResolution(res)}
+                        className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${
+                          globalResolution === res 
+                          ? 'bg-white text-black shadow-lg' 
+                          : 'text-white/40 hover:text-white'
+                        }`}
+                      >
+                        {res}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex bg-black/40 p-1 rounded-2xl border border-white/10">
+                    {['Original', '1:1', '16:9', '9:16', '4:3', '3:4'].map((ratio) => (
+                      <button
+                        key={ratio}
+                        onClick={() => setGlobalTargetAspectRatio(ratio)}
+                        className={`px-4 py-2 rounded-xl text-[10px] font-bold transition-all uppercase tracking-tighter ${
+                          globalTargetAspectRatio === ratio 
+                          ? 'bg-orange-500 text-black shadow-lg' 
+                          : 'text-white/40 hover:text-white'
+                        }`}
+                      >
+                        {ratio}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="flex bg-black/40 p-1 rounded-2xl border border-white/10">
-                  {['Original', '1:1', '16:9', '9:16', '4:3', '3:4'].map((ratio) => (
-                    <button
-                      key={ratio}
-                      onClick={() => setGlobalTargetAspectRatio(ratio)}
-                      className={`px-4 py-2 rounded-xl text-[10px] font-bold transition-all uppercase tracking-tighter ${
-                        globalTargetAspectRatio === ratio 
-                        ? 'bg-orange-500 text-black shadow-lg' 
-                        : 'text-white/40 hover:text-white'
-                      }`}
-                    >
-                      {ratio}
-                    </button>
-                  ))}
+                <div className="flex gap-3 w-full md:w-auto">
+                  {queue.length > 0 && (
+                    <>
+                      <button
+                        onClick={clearQueue}
+                        disabled={loading}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-2xl border border-white/10 text-white/40 hover:bg-red-500/10 hover:text-red-500 transition-all disabled:opacity-20"
+                      >
+                        <Trash2 size={18} />
+                        Clear
+                      </button>
+                      <button
+                        onClick={processQueue}
+                        disabled={loading || queue.every(i => i.status === 'completed')}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-orange-500 text-black px-8 py-3 rounded-2xl font-black uppercase tracking-tighter hover:scale-105 transition-all disabled:opacity-50 disabled:scale-100 shadow-[0_0_20px_rgba(249,115,22,0.3)]"
+                      >
+                        {loading ? <Loader2 className="animate-spin" size={20} /> : <Play size={20} />}
+                        {loading ? 'Processing...' : 'Process All'}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div className="flex gap-3 w-full md:w-auto">
-                {queue.length > 0 && (
-                  <>
-                    <button
-                      onClick={clearQueue}
-                      disabled={loading}
-                      className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-2xl border border-white/10 text-white/40 hover:bg-red-500/10 hover:text-red-500 transition-all disabled:opacity-20"
-                    >
-                      <Trash2 size={18} />
-                      Clear
-                    </button>
-                    <button
-                      onClick={processQueue}
-                      disabled={loading || queue.every(i => i.status === 'completed')}
-                      className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-orange-500 text-black px-8 py-3 rounded-2xl font-black uppercase tracking-tighter hover:scale-105 transition-all disabled:opacity-50 disabled:scale-100 shadow-[0_0_20px_rgba(249,115,22,0.3)]"
-                    >
-                      {loading ? <Loader2 className="animate-spin" size={20} /> : <Play size={20} />}
-                      {loading ? 'Processing...' : 'Process All'}
-                    </button>
-                  </>
-                )}
+              <div className="bg-white/5 p-6 rounded-3xl border border-white/10 backdrop-blur-md">
+                <div className="flex items-center gap-3 mb-4">
+                  <Play size={16} className="text-orange-500" />
+                  <h3 className="text-xs font-black uppercase tracking-widest italic">Additional Instructions (Optional)</h3>
+                </div>
+                <textarea 
+                  value={globalCustomPrompt}
+                  onChange={(e) => setGlobalCustomPrompt(e.target.value)}
+                  placeholder="Example: Add more sunlight, make the grass greener, remove the car in the background..."
+                  className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-sm text-white placeholder:text-white/10 focus:outline-none focus:border-orange-500 transition-all h-24 resize-none"
+                />
               </div>
             </div>
 
